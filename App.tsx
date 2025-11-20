@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Split, Monitor, Edit3, Download, FileText, Wand2, Trash2, Save } from 'lucide-react';
+import { Split, Monitor, Edit3, Download, FileText, Wand2, Trash2, Upload, FileUp } from 'lucide-react';
 import { Button } from './components/Button';
 import { MarkdownPreview } from './components/MarkdownPreview';
 import { improveMarkdown } from './services/geminiService';
@@ -8,10 +8,11 @@ import { EditorMode } from './types';
 // Default content to show on first load
 const DEFAULT_CONTENT = `# Welcome to MarkVisualizer Pro
 
-This is a **powerful** markdown editor with real-time preview.
+This is a **powerful** markdown editor with real-time visualization.
 
 ## Features
 - 🚀 Real-time visualization
+- 🔄 **Import PDF & Word** (New!)
 - ✨ AI-powered enhancement
 - 📄 Export to PDF & Word
 - 🎨 Clean, modern UI
@@ -36,9 +37,11 @@ export default function App() {
   const [content, setContent] = useState<string>(DEFAULT_CONTENT);
   const [mode, setMode] = useState<EditorMode>(EditorMode.SPLIT);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [fileName, setFileName] = useState("document");
   
   const previewRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Handle window resize for responsive mode switching
   useEffect(() => {
@@ -69,11 +72,75 @@ export default function App() {
     }
   };
 
+  // Import Handler
+  const handleImportClick = () => {
+    if (fileInputRef.current) {
+        fileInputRef.current.click();
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Update filename based on imported file
+    const newFileName = file.name.split('.').slice(0, -1).join('.');
+    setFileName(newFileName);
+    setIsImporting(true);
+
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+
+        if (file.type === "application/pdf") {
+            // PDF Extraction Logic
+            const pdfjsLib = (window as any).pdfjsLib;
+            if (!pdfjsLib) throw new Error("PDF library not loaded");
+
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            let fullText = `# ${newFileName}\n\n`;
+            
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map((item: any) => item.str).join(' ');
+                // Simple heuristic to add newlines for likely paragraphs
+                fullText += pageText + "\n\n";
+            }
+            
+            setContent(fullText);
+            alert(`Imported PDF: ${pdf.numPages} pages processed.`);
+
+        } else if (file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+            // DOCX Extraction Logic
+            const mammoth = (window as any).mammoth;
+            const TurndownService = (window as any).TurndownService;
+            
+            if (!mammoth || !TurndownService) throw new Error("Word converter libraries not loaded");
+
+            const result = await mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+            const turndownService = new TurndownService({ 
+                headingStyle: 'atx',
+                codeBlockStyle: 'fenced'
+            });
+            const markdown = turndownService.turndown(result.value);
+            
+            setContent(markdown);
+        } else {
+            alert("Unsupported file type. Please upload .pdf or .docx");
+        }
+    } catch (error) {
+        console.error("Import failed:", error);
+        alert("Failed to import file. See console for details.");
+    } finally {
+        setIsImporting(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   // PDF Export
   const handleExportPdf = useCallback(() => {
     if (!previewRef.current) return;
     
-    // Assuming html2pdf is loaded via CDN in index.html
     const html2pdf = (window as any).html2pdf;
     if (!html2pdf) {
         alert("PDF generator library not loaded.");
@@ -92,13 +159,11 @@ export default function App() {
     html2pdf().set(opt).from(element).save();
   }, [fileName]);
 
-  // Word Export (Client-side simplified)
+  // Word Export
   const handleExportDoc = useCallback(() => {
     const header = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Export HTML to Word Document with JavaScript</title></head><body>`;
     const footer = "</body></html>";
     
-    // Use the innerHTML of the preview logic. 
-    // Note: For robust Word export, ideally we use a serializer, but pulling the rendered HTML is a good proxy for visualization.
     const sourceHTML = header + (previewRef.current?.innerHTML || "") + footer;
     
     const source = 'data:application/vnd.ms-word;charset=utf-8,' + encodeURIComponent(sourceHTML);
@@ -112,6 +177,15 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden">
+      {/* Hidden File Input */}
+      <input 
+        type="file" 
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+        className="hidden"
+        accept=".pdf,.docx"
+      />
+
       {/* Header */}
       <header className="flex-none h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-6 z-10 shadow-sm">
         <div className="flex items-center gap-3">
@@ -156,33 +230,49 @@ export default function App() {
             
             <div className="h-6 w-px bg-slate-200 mx-2 hidden md:block"></div>
 
+            {/* Import Button */}
             <Button 
                 variant="secondary" 
+                size="sm" 
+                icon={isImporting ? <span className="animate-spin">⌛</span> : <Upload className="w-4 h-4 text-slate-600" />}
+                onClick={handleImportClick}
+                disabled={isImporting}
+                title="Import PDF or Word (.docx)"
+                className="hidden sm:flex"
+            >
+                Import
+            </Button>
+
+            <Button 
+                variant="ghost"
                 size="sm" 
                 icon={<Wand2 className="w-4 h-4 text-indigo-500" />}
                 onClick={handleAiImprove}
                 isLoading={isAiLoading}
-                className="hidden sm:flex"
+                className="hidden lg:flex"
             >
                 AI Polish
             </Button>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 ml-2">
                 <Button 
                     variant="ghost" 
                     size="sm" 
                     onClick={handleExportDoc}
-                    title="Download Word Doc"
+                    title="Export as Word Doc"
+                    className="border border-slate-200"
                 >
-                   <FileText className="w-4 h-4 text-blue-600" />
+                   <FileText className="w-4 h-4 text-blue-600 mr-1" />
+                   <span className="hidden sm:inline">Word</span>
                 </Button>
                 <Button 
                     variant="primary" 
                     size="sm" 
                     icon={<Download className="w-4 h-4" />}
                     onClick={handleExportPdf}
+                    title="Export as PDF"
                 >
-                    PDF
+                    <span className="hidden sm:inline">PDF</span>
                 </Button>
             </div>
         </div>
@@ -210,7 +300,7 @@ export default function App() {
                 onChange={(e) => setContent(e.target.value)}
                 className="flex-1 w-full bg-slate-900 text-slate-200 p-6 font-mono text-sm focus:outline-none resize-none leading-relaxed"
                 spellCheck={false}
-                placeholder="# Start typing..."
+                placeholder="# Start typing or Import a document..."
             />
         </div>
 
@@ -238,7 +328,15 @@ export default function App() {
       </main>
       
       {/* Mobile Floating Action Button for AI */}
-       <div className="sm:hidden fixed bottom-6 right-6">
+       <div className="sm:hidden fixed bottom-20 right-6 flex flex-col gap-4">
+            <button 
+             onClick={handleImportClick}
+             disabled={isImporting}
+             className="bg-white text-slate-700 p-4 rounded-full shadow-lg border border-slate-200 active:scale-95 transition-all"
+           >
+             {isImporting ? <span className="animate-spin block">⌛</span> : <Upload className="w-6 h-6" />}
+           </button>
+
            <button 
              onClick={handleAiImprove}
              disabled={isAiLoading}
